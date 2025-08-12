@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Offline Live HTML Previewer + Resizable 3-Pane Layout</title>
+<style>
+  :root{
+    --bg:#0b0d10;--panel:#12151a;--muted:#8792a2;--text:#dfe7f1;--accent:#5cc8ff;--accent-2:#9effa3;
+    --danger:#ff6b6b;--warn:#ffd166;--ok:#06d6a0;--outline:#2c3240;--card:#161a21;
+    --gutter:#1b212c;--gutter-hover:#273041;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:linear-gradient(180deg,#0b0d10,#0e1218);
+    color:var(--text);font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,"Helvetica Neue",Arial;
+    overflow:hidden;
+  }
+
+  /* Header */
+  header{
+    background:var(--panel);border:1px solid var(--outline);border-radius:12px;padding:10px 12px;
+    display:flex;align-items:center;gap:12px;box-shadow:0 1px 0 rgba(0,0,0,.4) inset;margin:10px;
+  }
+  header h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.2px}
+  header .sp{flex:1}
+  .btn{
+    background:#11161f;color:var(--text);border:1px solid #2b3344;border-radius:10px;padding:8px 10px;cursor:pointer;
+  }
+  .btn:hover{border-color:#3a4359}
+  .btn.primary{background:linear-gradient(180deg,#1f91ff,#1677db);border-color:#1677db}
+  .btn.danger{background:linear-gradient(180deg,#ff6b6b,#ef4444);border-color:#ef4444}
+  .btn.small{padding:6px 8px;border-radius:8px;font-size:12px}
+  .toggle{display:inline-flex;align-items:center;gap:6px}
+  .toggle input{accent-color:var(--accent)}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px}
+
+  /* Three-pane work area */
+  .workarea{
+    position:fixed; inset:64px 10px 10px 10px; /* room for header */
+    display:flex; gap:0; min-height:300px;
+    border-right:10px solid var(--outline);
+  }
+  .pane{
+    background:var(--card);border:1px solid var(--outline);border-radius:12px;box-shadow:0 1px 0 rgba(255,255,255,.02) inset;
+    overflow:auto; padding:10px; min-width:0;        /* no hard minimum */
+    display:flex; flex-direction:column; min-height:0; /* allow vertical stretch */
+  }
+  .pane + .gutter{cursor:col-resize; width:8px; flex:0 0 8px; margin:0 8px; position:relative; z-index:5;}
+  .gutter::after{
+    content:""; position:absolute; top:10px; bottom:10px; left:2px; right:2px; border-radius:6px; background:var(--gutter);
+  }
+  .gutter:hover::after, .gutter.dragging::after{ background:var(--gutter-hover); }
+  body.is-dragging, body.is-dragging *{ user-select:none; }
+
+  .left{display:flex;flex-direction:column;gap:10px}
+  .group h3{font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:#a9b3c2;margin:0 0 8px}
+  .fields{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .fields.wide{grid-template-columns:repeat(6,1fr)}
+  .fields label{font-size:12px;color:#9fb2c8}
+  .fields input,.fields select{
+    width:100%;padding:8px 9px;border:1px solid #2b3344;border-radius:8px;background:#0f131b;color:var(--text);
+  }
+
+  /* =========================
+     CODE EDITOR (row-per-line overlay)
+     ========================= */
+  .code-group{display:flex;flex-direction:column;flex:1;min-height:0;}
+  .editor-shell{
+    --gutter-w:56px;   /* width reserved for numbers */
+    --sep:8px;         /* spacing between number and code */
+    position:relative; flex:1; min-height:0;
+    border:1px solid #2b3344; border-radius:8px; overflow:hidden;
+    background:#0b0f16;
+  }
+
+  /* Lines overlay: one row per code line (ln | code) */
+  .editor-lines{
+    position:absolute; inset:0; pointer-events:none;
+    padding:10px;           /* matches textarea base padding (without gutter/sep) */
+    color:#dfe7f1; white-space:pre; z-index:1;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size:12px;
+    tab-size:2;
+  }
+  .editor-lines .row{
+    display:grid; grid-template-columns: var(--gutter-w) 1fr; gap:var(--sep);
+    align-items:center; height:16px; line-height:16px; /* JS overwrites to exact px */
+  }
+  .editor-lines .ln{
+    text-align:right; padding-right:0; color:#6e7b91;
+  }
+  .editor-lines .code{min-width:0; white-space:pre; tab-size:2;}
+
+  /* caret/input layer (matches left offset: base 10px + gutter + sep) */
+  textarea.code.editor-input{
+    position:absolute; inset:0;
+    border:0; outline:none; background:transparent; color:transparent; caret-color:#dfe7f1;
+    padding:10px; padding-left:calc(10px + var(--gutter-w) + var(--sep)); resize:none; overflow:auto;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace; font-size:12px; line-height:1;
+    white-space:pre; tab-size:2;
+  }
+
+  /* Bracket overlay aligned with code start */
+  .editor-overlay{
+    position:absolute; inset:0; pointer-events:none; z-index:2;
+    padding:10px; padding-left:calc(10px + var(--gutter-w) + var(--sep));
+  }
+  .bracket-mark{
+    position:absolute; border:1px solid var(--accent); border-radius:3px;
+    box-shadow:0 0 0 2px rgba(92,200,255,.18); background:rgba(92,200,255,.08);
+    width:8px;height:18px;
+  }
+
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .footer-hint{color:#93a0b4;font-size:12px;margin-top:6px;opacity:.8}
+
+  /* Syntax token colors */
+  .tok-op{color:#93b5ff}
+  .tok-tag{color:#9effa3}
+  .tok-attr{color:#ffd166}
+  .tok-val{color:#ff9aa2}
+  .tok-cmt{color:#6e7b91;font-style:italic}
+  .tok-doctype{color:#c3e88d}
+
+  /* Right preview pane */
+  .preview-wrap{display:flex;flex-direction:column;gap:8px;height:100%;min-height:0;}
+  .device-bar{display:grid;grid-template-columns:1fr;gap:8px;align-items:end}
+  .frame{
+    background:#0e1117;border:1px solid var(--outline);border-radius:16px;padding:12px;display:flex;justify-content:center;align-items:center;flex:1;overflow:auto;min-height:0;
+  }
+  .viewport{
+    background:#fff;border:1px solid #2b3344;border-radius:14px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.5);
+    width:390px;height:844px; /* updated by JS */
+  }
+  .scale{
+    width:390px;height:844px; /* updated by JS */
+    transform:scale(.8);transform-origin:top left;
+  }
+  iframe{width:100%;height:100%;border:0;display:block;background:white}
+
+  /* Find/Replace modal */
+  .find-modal{
+    position:fixed;left:20px;top:80px;z-index:50;
+    background:#0f131b;border:1px solid #2b3344;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.5);
+    padding:12px;min-width:420px;display:none;
+  }
+  .find-modal.open{display:block}
+  .find-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:end}
+  .find-grid label{font-size:12px;color:#9fb2c8}
+  .find-grid input[type="text"]{
+    width:100%;padding:8px 9px;border:1px solid #2b3344;border-radius:8px;background:#0b0f16;color:#fff;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;
+  }
+  .find-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+  .find-flags{display:flex;gap:12px;align-items:center;margin-top:4px;color:#9fb2c8;font-size:12px}
+  .find-counter{margin-left:auto;color:#cfe6ff}
+</style>
+</head>
+<body>
+  <header>
+    <h1>Live HTML Previewer</h1>
+    <div class="sp"></div>
+    <label class="toggle mono"><input type="checkbox" id="auto-refresh" checked> Auto-Refresh</label>
+    <button id="btn-refresh" class="btn primary">Refresh Preview</button>
+    <button id="btn-download" class="btn">Download Code (.zip)</button>
+    <button id="btn-clear" class="btn danger">Clear</button>
+  </header>
+
+  <div class="workarea" id="workarea">
+    <!-- LEFT: Settings -->
+    <aside class="pane left" id="pane-left" style="flex:0 0 33.33%;">
+      <div class="group">
+        <h3>Base & Utilities</h3>
+        <div class="fields">
+          <label>Base URL (for relative paths)
+            <input id="base-url" placeholder="https://example.com/ or /myapp/">
+          </label>
+          <label>Debounce (ms)
+            <input id="debounce" type="number" min="0" step="50" value="300">
+          </label>
+        </div>
+        <div class="toolbar">
+          <button class="btn small" id="btn-load-sample">Load Minimal Sample</button>
+          <button class="btn small" id="btn-open-window">Open Preview in New Window</button>
+          <span class="mono" style="opacity:.75">Find: Ctrl+F · Replace: Ctrl+H · Next: Enter · Prev: Shift+Enter · Close: Esc</span>
+        </div>
+      </div>
+
+      <div class="group preview-wrap">
+        <h3>Device Preview Controls</h3>
+        <div class="device-bar">
+          <div class="fields wide">
+            <label style="grid-column:1/3">Device Preset
+              <select id="preset">
+                <option value="">Custom</option>
+                <option value="1080x2340">Samsung Galaxy A15 5G - 1080×2340</option>
+                <option value="720x1600">Samsung Galaxy A05 - 720×1600</option>
+                <option value="720x1600">Xiaomi Redmi 13C - 720×1600</option>
+                <option value="1179x2556">iPhone 15 - 1179×2556</option>
+                <option value="1290x2796">iPhone 15 Pro Max - 1290×2796</option>
+                <option value="1640x2360">iPad (10th gen) - 1640×2360</option>
+                <option value="1280x720">720p screen - 1280×720</option>
+                <option value="1366x768">768p screen - 1366×768</option>
+                <option value="1920x1080">1080p screen - 1920×1080</option>
+                <option value="2560x1440">1440p screen - 2560×1440</option>
+                <option value="3840x2160">4K screen - 3840×2160</option>
+              </select>
+            </label>
+            <label>Width<br><input id="vp-w" type="number" value="390" min="1" max="6000"></label>
+            <label>Height<br><input id="vp-h" type="number" value="844" min="1" max="6000"></label>
+            <label>Units<br>
+              <select id="vp-units">
+                <option value="css" selected>CSS px</option>
+                <option value="physical">Physical px ÷ DPR</option>
+              </select>
+            </label>
+            <label>DPR<br><input id="vp-dpr" type="number" value="1" step="0.25" min="1" max="8"></label>
+            <label>Lock Ratio<br>
+              <select id="vp-lock">
+                <option value="off">Off</option>
+                <option value="on" selected>On</option>
+              </select>
+            </label>
+            <label>Rotate<br>
+              <select id="vp-rotate">
+                <option value="0" selected>Portrait</option>
+                <option value="90">Landscape</option>
+              </select>
+            </label>
+            <label>Zoom (%)<br><input id="vp-zoom" type="number" value="80" min="10" max="300"></label>
+            <label style="grid-column:1/3" class="toggle mono"><input type="checkbox" id="vp-autofit" checked> Auto-Fit on Change</label>
+          </div>
+          <div class="toolbar" style="grid-column:1/-1">
+            <button class="btn small" id="btn-fit">Fit in Frame</button>
+            <button class="btn small" id="btn-refresh2">Refresh Preview</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Gutter 1 -->
+    <div class="gutter" id="gutter-1" aria-hidden="true"></div>
+
+    <!-- MIDDLE: Code editor -->
+    <section class="pane" id="pane-middle" style="flex:0 0 33.33%;">
+      <div class="group code-group">
+        <h3>index.html</h3>
+
+        <div class="editor-shell" id="editorWrap">
+          <div class="editor-lines mono" id="linesLayer"></div>
+          <div class="editor-overlay" id="overlay" aria-hidden="true"></div>
+          <textarea id="code-html" class="code editor-input mono" spellcheck="false" wrap="off" placeholder="Paste your FULL index.html here (<!DOCTYPE html> ...)."></textarea>
+        </div>
+
+        <div class="footer-hint">Tip: If your HTML uses relative URLs, set a Base URL so images, CSS, and JS resolve correctly.</div>
+      </div>
+    </section>
+
+    <!-- Gutter 2 -->
+    <div class="gutter" id="gutter-2" aria-hidden="true"></div>
+
+    <!-- RIGHT: Live preview -->
+    <aside class="pane preview-wrap" id="pane-right" style="flex:0 0 33.34%;">
+      <div class="frame">
+        <div class="viewport" id="viewport">
+          <div class="scale" id="scale">
+            <iframe id="preview" title="Live Preview"
+              sandbox="allow-forms allow-pointer-lock allow-popups allow-same-origin allow-scripts"></iframe>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Find/Replace Modal -->
+  <div class="find-modal" id="findModal" role="dialog" aria-modal="true" aria-labelledby="findTitle">
+    <div class="find-grid">
+      <label style="grid-column:1/-1"><span id="findTitle" class="mono" style="color:#cfe6ff">Find & Replace</span></label>
+      <label>Find
+        <input id="findQuery" type="text" placeholder="text or regex">
+      </label>
+      <label>Replace
+        <input id="replaceQuery" type="text" placeholder="replacement">
+      </label>
+    </div>
+    <div class="find-flags">
+      <label class="toggle mono"><input type="checkbox" id="flagCase"> Case sensitive</label>
+      <label class="toggle mono"><input type="checkbox" id="flagRegex"> Regex</label>
+      <span class="find-counter mono" id="findCounter">0 / 0</span>
+    </div>
+    <div class="find-actions">
+      <button class="btn small" id="btnPrev">Prev</button>
+      <button class="btn small" id="btnNext">Next</button>
+      <button class="btn small" id="btnReplace">Replace</button>
+      <button class="btn small" id="btnReplaceAll">Replace All</button>
+      <button class="btn small" id="btnCloseFind">Close (Esc)</button>
+    </div>
+  </div>
+
+<script>
+/* ---------- Helpers ---------- */
+const $ = sel => document.querySelector(sel);
+const clamp = (n,min,max)=>Math.max(min,Math.min(max,n));
+
+/* ---------- Code → Preview ---------- */
+const codeEl = $('#code-html');
+const baseEl = $('#base-url');
+const debounceEl = $('#debounce');
+const iframe = $('#preview');
+const autoRefresh = $('#auto-refresh');
+let debounceTimer = null;
+
+function injectBase(html, baseHref){
+  if(!baseHref) return html;
+  if(/<base\b[^>]*>/i.test(html)) return html;
+  if(!/<head\b[^>]*>/i.test(html)){
+    if(/<html\b[^>]*>/i.test(html)){
+      return html.replace(/<html\b[^>]*>/i, m => m + '<head><base href="'+baseHref+'"></head>');
+    }else{
+      return `<!DOCTYPE html>
+<html><head><base href="${baseHref}"></head><body>${html}</body></html>`;
+    }
+  }
+  return html.replace(/<head\b[^>]*>/i, m => m + '<base href="'+baseHref+'">');
+}
+function ensureDoc(html){
+  const hasHtml = /<html\b/i.test(html);
+  if(hasHtml) return html;
+  const safe = html || '';
+  return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"></head>
+<body>
+${safe}
+</body></html>`;
+}
+function currentSrcdoc(){
+  const baseHref = (baseEl.value || '').trim();
+  let html = codeEl.value;
+  html = ensureDoc(html);
+  html = injectBase(html, baseHref);
+  return html;
+}
+function refreshPreview(){ iframe.srcdoc = currentSrcdoc(); }
+function scheduleRefresh(){
+  if(!autoRefresh.checked) return;
+  const wait = Math.max(0, parseInt(debounceEl.value||'300',10));
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(refreshPreview, wait);
+}
+$('#btn-refresh').addEventListener('click', refreshPreview);
+$('#btn-refresh2').addEventListener('click', refreshPreview);
+$('#btn-clear').addEventListener('click', ()=>{
+  if(confirm('Clear the code editor?')){ codeEl.value=''; updateEditorUI(); refreshPreview(); }
+});
+$('#btn-open-window').addEventListener('click', ()=>{
+  const w = window.open('', '_blank');
+  if(!w){ alert('Popup blocked. Allow popups.'); return; }
+  w.document.open(); w.document.write(currentSrcdoc()); w.document.close();
+});
+codeEl.addEventListener('input', ()=>{ updateEditorUI(); scheduleRefresh(); });
+
+/* ---------- Row-per-line overlay (numbers + highlighted code) ---------- */
+const linesLayer = $('#linesLayer');
+const overlay = $('#overlay');
+let charWidth = 8, lineHeight = 18;
+
+function measureLineHeightFromTextarea(){
+  const cs = getComputedStyle(codeEl);
+  const clone = document.createElement('textarea');
+  clone.value = 'X\nX';
+  clone.rows = 2;
+  clone.style.visibility='hidden';
+  clone.style.position='absolute';
+  clone.style.top='-9999px';
+  clone.style.left='-9999px';
+  clone.style.height='auto';
+  clone.style.overflow='hidden';
+  clone.style.whiteSpace='pre';
+  clone.style.font = cs.font;
+  clone.style.padding = cs.padding;
+  clone.style.border = cs.border;
+  clone.style.boxSizing = cs.boxSizing;
+  document.body.appendChild(clone);
+  const ccs = getComputedStyle(clone);
+  const pt = parseFloat(ccs.paddingTop)||0;
+  const pb = parseFloat(ccs.paddingBottom)||0;
+  const sh = clone.scrollHeight;
+  document.body.removeChild(clone);
+  return Math.max(12, Math.round((sh - pt - pb) / 2));
+}
+function computeCharWidth(){
+  const cs = getComputedStyle(codeEl);
+  const s = document.createElement('span');
+  s.style.visibility='hidden';
+  s.style.position='absolute';
+  s.style.whiteSpace='pre';
+  s.style.font = cs.font;
+  s.textContent = 'MMMMMMMMMM';
+  document.body.appendChild(s);
+  charWidth = s.getBoundingClientRect().width / 10;
+  document.body.removeChild(s);
+}
+
+/* Tokenize a single line */
+function escapeHTML(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function highlightLine(line){
+  let esc = escapeHTML(line);
+  esc = esc.replace(/(&lt;!--.*?--&gt;)/g, '<span class="tok-cmt">$1</span>');
+  esc = esc.replace(/(&lt;!DOCTYPE\b.*?&gt;)/i, '<span class="tok-doctype">$1</span>');
+  esc = esc.replace(/(&lt;\/?)([a-zA-Z][\w:-]*)([^&]*?)(\/?&gt;)/g,
+    (m, open, name, attrs, close) => {
+      attrs = attrs.replace(/([a-zA-Z_:][\w:.-]*)(\s*=\s*)(".*?"|'.*?'|[^\s"'=<>`]+)/g,
+        '<span class="tok-attr">$1</span>$2<span class="tok-val">$3</span>');
+      return `<span class="tok-op">${open}</span><span class="tok-tag">${name}</span>${attrs}<span class="tok-op">${close}</span>`;
+    }
+  );
+  return esc || '&nbsp;';
+}
+
+/* Render rows: one number per line, aligned exactly */
+function renderLines(text){
+  const lines = text.split('\n');
+  let html = '';
+  for(let i=0;i<lines.length;i++){
+    html += `<div class="row" style="height:${lineHeight}px;line-height:${lineHeight}px"><div class="ln">${i+1}</div><div class="code">${highlightLine(lines[i])}</div></div>`;
+  }
+  linesLayer.innerHTML = html;
+}
+
+/* Keep overlay/lines sized and scrolled with the textarea */
+function sizeEditorLayers(){
+  const sh = codeEl.scrollHeight;
+  const sw = codeEl.scrollWidth;
+  linesLayer.style.height = sh + 'px';
+  linesLayer.style.width  = sw + 'px';
+  overlay.style.height    = sh + 'px';
+  overlay.style.width     = sw + 'px';
+}
+function syncScroll(force=false){
+  const st = Math.round(codeEl.scrollTop);
+  const sl = Math.round(codeEl.scrollLeft);
+  if(force || linesLayer._st !== st || linesLayer._sl !== sl){
+    linesLayer.style.transform = `translate(${-sl}px, ${-st}px)`;
+    overlay.style.transform    = `translate(${-sl}px, ${-st}px)`;
+    linesLayer._st = st; linesLayer._sl = sl;
+  }
+}
+codeEl.addEventListener('scroll', ()=>{ sizeEditorLayers(); syncScroll(); });
+
+/* Bracket matching (positions use textarea paddings) */
+function findMatchingBracket(text, caret){
+  const pairs = {'(' : ')', '[' : ']', '{' : '}', '<' : '>', ')' : '(', ']' : '[', '}' : '{', '>' : '<'};
+  const opens = '([{<'; const closes = ')]}>';
+  let idx = caret;
+  let ch = text[idx];
+  if(!pairs[ch]){ idx = caret-1; ch = text[idx]; if(!pairs[ch]) return null; }
+  const match = pairs[ch]; let depth = 0;
+  if(opens.includes(ch)){
+    for(let i=idx;i<text.length;i++){
+      const c = text[i];
+      if(c===ch) depth++;
+      else if(c===match){ depth--; if(depth===0) return [idx,i]; }
+    }
+  }else if(closes.includes(ch)){
+    for(let i=idx;i>=0;i--){
+      const c = text[i];
+      if(c===ch) depth++;
+      else if(c===match){ depth--; if(depth===0) return [i,idx]; }
+    }
+  }
+  return null;
+}
+function lineCol(text, index){
+  const pre = text.slice(0,index);
+  const lines = pre.split('\n');
+  const line = lines.length - 1;
+  const col = lines[lines.length-1].replace(/\t/g,'  ').length;
+  return {line, col};
+}
+function drawBracketMarks(){
+  overlay.innerHTML = '';
+  const caret = codeEl.selectionEnd || 0;
+  const text = codeEl.value || '';
+  const match = findMatchingBracket(text, caret);
+  if(!match) return;
+  const [a,b] = match;
+  const posA = lineCol(text, a);
+  const posB = lineCol(text, b);
+  const cs = getComputedStyle(overlay);
+  const padLeft = parseFloat(cs.paddingLeft) || 0;
+  const padTop  = parseFloat(cs.paddingTop)  || 0;
+
+  const make = (pos)=>{
+    const m = document.createElement('div');
+    m.className='bracket-mark';
+    m.style.width = Math.max(2, charWidth) + 'px';
+    m.style.height = lineHeight + 'px';
+    m.style.left = (padLeft + pos.col*charWidth) + 'px';
+    m.style.top  = (padTop + pos.line*lineHeight) + 'px';
+    return m;
+  };
+  overlay.appendChild(make(posA));
+  overlay.appendChild(make(posB));
+}
+codeEl.addEventListener('keyup', drawBracketMarks);
+codeEl.addEventListener('click', drawBracketMarks);
+codeEl.addEventListener('input', drawBracketMarks);
+
+function applyEditorMetrics(){
+  lineHeight = measureLineHeightFromTextarea();
+  computeCharWidth();
+  codeEl.style.lineHeight = lineHeight + 'px';
+  sizeEditorLayers();
+  syncScroll(true);
+}
+
+/* Update everything on input */
+function updateEditorUI(){
+  const text = codeEl.value || '';
+  renderLines(text);
+  sizeEditorLayers();
+  syncScroll(true);
+  drawBracketMarks();
+}
+
+/* ---------- Device frame ---------- */
+const vp = {
+  w: $('#vp-w'), h: $('#vp-h'), units: $('#vp-units'), dpr: $('#vp-dpr'),
+  lock: $('#vp-lock'), rotate: $('#vp-rotate'), zoom: $('#vp-zoom'),
+  preset: $('#preset'), viewport: $('#viewport'), scale: $('#scale'), autofit: $('#vp-autofit')
+};
+let editingWH = false;
+let ratio = parseFloat(vp.w.value)/parseFloat(vp.h.value);
+function cssDims(){
+  let w = parseFloat(vp.w.value||390);
+  let h = parseFloat(vp.h.value||844);
+  if(vp.units.value === 'physical'){
+    const d = Math.max(1, parseFloat(vp.dpr.value||1));
+    w = Math.max(1, Math.round(w / d));
+    h = Math.max(1, Math.round(h / d));
+  }
+  if(vp.rotate.value === '90'){ return {w:h, h:w}; }
+  return {w,h};
+}
+function applyViewportSize(){
+  const {w,h} = cssDims();
+  const z = clamp(parseInt(vp.zoom.value||100,10),10,300)/100;
+  vp.scale.style.width = w+'px';
+  vp.scale.style.height = h+'px';
+  vp.scale.style.transform = `scale(${z})`;
+  vp.scale.style.transformOrigin = 'top left';
+  vp.viewport.style.width = (w*z)+'px';
+  vp.viewport.style.height = (h*z)+'px';
+}
+function fitToFrame(){
+  const frame = document.querySelector('.frame');
+  const pad = 40;
+  const fw = frame.clientWidth - pad, fh = frame.clientHeight - pad;
+  const {w,h} = cssDims();
+  const scale = Math.min(3, Math.max(.1, Math.min(fw/w, fh/h)));
+  const pct = Math.round(scale*100);
+  vp.zoom.value = pct;
+  applyViewportSize();
+}
+function autoFitMaybe(){ if(vp.autofit.checked) fitToFrame(); else applyViewportSize(); }
+function updateRatioFromInputs(){
+  const w = parseFloat(vp.w.value||1);
+  const h = parseFloat(vp.h.value||1);
+  if(w>0 && h>0) ratio = w/h;
+}
+vp.w.addEventListener('input', ()=>{
+  if(vp.lock.value==='on' && !editingWH){
+    editingWH = true;
+    const w = Math.max(1, parseFloat(vp.w.value||1));
+    const newH = Math.max(1, Math.round(w / (ratio||1)));
+    vp.h.value = newH;
+    editingWH = false;
+  }
+  autoFitMaybe();
+});
+vp.h.addEventListener('input', ()=>{
+  if(vp.lock.value==='on' && !editingWH){
+    editingWH = true;
+    const h = Math.max(1, parseFloat(vp.h.value||1));
+    const newW = Math.max(1, Math.round(h * (ratio||1)));
+    vp.w.value = newW;
+    editingWH = false;
+  }
+  autoFitMaybe();
+});
+vp.lock.addEventListener('change', ()=>{ updateRatioFromInputs(); });
+vp.rotate.addEventListener('change', ()=>{ autoFitMaybe(); });
+vp.zoom.addEventListener('input', applyViewportSize);
+vp.units.addEventListener('change', ()=>{ autoFitMaybe(); });
+vp.dpr.addEventListener('input', ()=>{ autoFitMaybe(); });
+vp.autofit.addEventListener('change', ()=>{ autoFitMaybe(); });
+$('#btn-fit').addEventListener('click', fitToFrame);
+vp.preset.addEventListener('change', ()=>{
+  if(vp.preset.value){
+    const [w,h] = vp.preset.value.split('x').map(n=>parseInt(n,10));
+    vp.w.value = w; vp.h.value = h; ratio = w/h;
+  }
+  autoFitMaybe();
+});
+window.addEventListener('resize', ()=>{ if(vp.autofit.checked) fitToFrame(); });
+
+/* ---------- ZIP download ---------- */
+$('#btn-download').addEventListener('click', async ()=>{
+  const html = codeEl.value || '';
+  const zip = makeZip([{name:'index.html', content: html}]);
+  const blob = new Blob([zip], {type:'application/zip'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'site.zip';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+function makeZip(files){
+  const enc = new TextEncoder();
+  let fileData = [], central = [], offset = 0;
+  function crc32(buf){
+    let c = ~0;
+    for (let i=0;i<buf.length;i++){ c ^= buf[i]; for(let k=0;k<8;k++) c = (c>>>1) ^ (0xEDB88320 & -(c&1)); }
+    return (~c)>>>0;
+  }
+  for (const f of files){
+    const data = enc.encode(f.content), name = enc.encode(f.name), crc = crc32(data);
+    const local = new Uint8Array(30 + name.length);
+    const v = new DataView(local.buffer);
+    v.setUint32(0, 0x04034b50, true); v.setUint16(4, 20, true); v.setUint16(6, 0, true); v.setUint16(8, 0, true);
+    v.setUint16(10, 0, true); v.setUint16(12, 0, true); v.setUint32(14, crc, true);
+    v.setUint32(18, data.length, true); v.setUint32(22, data.length, true);
+    v.setUint16(26, name.length, true); v.setUint16(28, 0, true); local.set(name, 30);
+    fileData.push(local, data);
+    const cent = new Uint8Array(46 + name.length);
+    const w = new DataView(cent.buffer);
+    w.setUint32(0, 0x02014b50, true); w.setUint16(4, 20, true); w.setUint16(6, 20, true);
+    w.setUint16(8, 0, true); w.setUint16(10, 0, true); w.setUint16(12, 0, true); w.setUint16(14, 0, true);
+    w.setUint32(16, crc, true); w.setUint32(20, data.length, true); w.setUint32(24, data.length, true);
+    w.setUint16(28, name.length, true); w.setUint16(30, 0, true); w.setUint16(32, 0, true);
+    w.setUint16(34, 0, true); w.setUint16(36, 0, true); w.setUint32(38, 0, true); w.setUint32(42, offset, true);
+    cent.set(name, 46); central.push(cent);
+    offset += local.length + data.length;
+  }
+  let centralSize = central.reduce((s,a)=>s+a.length,0), centralOffset = offset;
+  let end = new Uint8Array(22), dv = new DataView(end.buffer);
+  dv.setUint32(0, 0x06054b50, true); dv.setUint16(4, 0, true); dv.setUint16(6, 0, true);
+  dv.setUint16(8, files.length, true); dv.setUint16(10, files.length, true);
+  dv.setUint32(12, centralSize, true); dv.setUint32(16, centralOffset, true); dv.setUint16(20, 0, true);
+  return concatUint8(fileData.concat(central).concat([end]));
+}
+function concatUint8(arrs){
+  const len = arrs.reduce((s,a)=>s+a.length,0);
+  const out = new Uint8Array(len);
+  let o=0; for(const a of arrs){ out.set(a,o); o+=a.length; }
+  return out.buffer;
+}
+
+/* ---------- Find/Replace ---------- */
+const findUI = {
+  modal: $('#findModal'),
+  find: $('#findQuery'),
+  replace: $('#replaceQuery'),
+  flagCase: $('#flagCase'),
+  flagRegex: $('#flagRegex'),
+  counter: $('#findCounter'),
+  btnPrev: $('#btnPrev'),
+  btnNext: $('#btnNext'),
+  btnReplace: $('#btnReplace'),
+  btnReplaceAll: $('#btnReplaceAll'),
+  btnClose: $('#btnCloseFind')
+};
+let matches = []; let currentIndex = -1;
+function escRegExp(s){return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
+function buildRegex(){
+  const q = findUI.find.value || '';
+  if(!q) return null;
+  const source = findUI.flagRegex.checked ? q : escRegExp(q);
+  const flags = findUI.flagCase.checked ? 'g' : 'gi';
+  try{ return new RegExp(source, flags); }catch(e){ return null; }
+}
+function computeMatches(){
+  matches = [];
+  const re = buildRegex(); if(!re){ updateCounter(); return; }
+  const text = codeEl.value; let m;
+  while((m = re.exec(text)) !== null){
+    const start = m.index; const end = start + (m[0].length || 1);
+    matches.push({start,end}); if(m[0].length === 0){ re.lastIndex++; }
+  }
+  const caret = codeEl.selectionEnd || 0;
+  currentIndex = matches.findIndex(r => r.start >= caret);
+  if(currentIndex === -1 && matches.length){ currentIndex = 0; }
+  updateCounter();
+}
+function updateCounter(){ const total = matches.length; const pos = total ? (currentIndex+1) : 0; findUI.counter.textContent = `${pos} / ${total}`; }
+function selectMatch(idx){
+  if(!matches.length) return;
+  currentIndex = (idx + matches.length) % matches.length;
+  const {start,end} = matches[currentIndex];
+  codeEl.focus(); codeEl.setSelectionRange(start, end);
+  const before = codeEl.value.slice(0, start);
+  const rows = before.split('\n').length;
+  codeEl.scrollTop = Math.max(0, rows*lineHeight - codeEl.clientHeight/2);
+  updateEditorUI();
+  updateCounter();
+}
+function findNext(){ if(!matches.length) computeMatches(); if(!matches.length) return; selectMatch((currentIndex+1) % matches.length); }
+function findPrev(){ if(!matches.length) computeMatches(); if(!matches.length) return; selectMatch((currentIndex-1+matches.length)%matches.length); }
+function replaceOne(){
+  if(!matches.length){ computeMatches(); if(!matches.length) return; }
+  const {start,end} = matches[currentIndex];
+  const before = codeEl.value.slice(0,start);
+  const after = codeEl.value.slice(end);
+  const re = buildRegex(); const segment = codeEl.value.slice(start,end);
+  let replacement = findUI.replace.value;
+  if(findUI.flagRegex.checked){
+    try{ replacement = segment.replace(new RegExp(re.source, findUI.flagCase.checked?'':'i'), replacement); }catch(e){}
+  }
+  codeEl.value = before + replacement + after;
+  scheduleRefresh(); updateEditorUI(); computeMatches();
+  if(matches.length){ selectMatch(currentIndex % matches.length); } else { updateCounter(); }
+}
+function replaceAll(){
+  const re = buildRegex(); if(!re) return;
+  const replacement = findUI.replace.value;
+  codeEl.value = codeEl.value.replace(re, replacement);
+  scheduleRefresh(); updateEditorUI(); computeMatches();
+}
+function openFind(withReplace=false){
+  findUI.modal.classList.add('open');
+  (withReplace ? findUI.replace : findUI.find).focus();
+  computeMatches();
+}
+function closeFind(){ findUI.modal.classList.remove('open'); codeEl.focus(); }
+findUI.btnNext.addEventListener('click', findNext);
+findUI.btnPrev.addEventListener('click', findPrev);
+findUI.btnReplace.addEventListener('click', replaceOne);
+findUI.btnReplaceAll.addEventListener('click', replaceAll);
+findUI.btnClose.addEventListener('click', closeFind);
+[findUI.find, findUI.replace, findUI.flagCase, findUI.flagRegex].forEach(el=> el.addEventListener('input', computeMatches));
+findUI.find.addEventListener('keydown', e=>{
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); findNext(); }
+  if(e.key==='Enter' && e.shiftKey){ e.preventDefault(); findPrev(); }
+});
+document.addEventListener('keydown', (e)=>{
+  const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+  const mod = isMac ? e.metaKey : e.ctrlKey;
+  if(mod && e.key.toLowerCase()==='f' && document.activeElement===codeEl){ e.preventDefault(); openFind(false); }
+  if(mod && e.key.toLowerCase()==='h' && document.activeElement===codeEl){ e.preventDefault(); openFind(true); }
+  if($('#findModal').classList.contains('open')){
+    if(e.key==='Enter' && e.target!==findUI.replace && e.target!==findUI.find){
+      if(e.shiftKey){ e.preventDefault(); findPrev(); } else { e.preventDefault(); findNext(); }
+    }
+    if(e.key==='Escape'){ e.preventDefault(); closeFind(); }
+  }
+});
+
+/* ---------- Resizable gutters (no minimum widths) ---------- */
+const workarea = $('#workarea');
+const left = $('#pane-left'), mid = $('#pane-middle'), right = $('#pane-right');
+const g1 = $('#gutter-1'), g2 = $('#gutter-2');
+let dragState = null;
+
+/* Track pane widths to scale proportionally on window resize */
+let paneState = null;
+function snapshotPaneState(){
+  paneState = {
+    containerW: workarea.clientWidth,
+    left: left.getBoundingClientRect().width,
+    mid: mid.getBoundingClientRect().width,
+    right: right.getBoundingClientRect().width
+  };
+}
+snapshotPaneState();
+
+function startDrag(which, ev){
+  dragState = {
+    which,
+    startX: ev.clientX,
+    leftW: left.getBoundingClientRect().width,
+    midW: mid.getBoundingClientRect().width,
+    rightW: right.getBoundingClientRect().width
+  };
+  (which===1?g1:g2).classList.add('dragging');
+  document.body.classList.add('is-dragging');
+  document.body.style.cursor='col-resize';
+  window.addEventListener('mousemove', onDrag);
+  window.addEventListener('mouseup', endDrag);
+}
+function onDrag(ev){
+  if(!dragState) return;
+  const dx = ev.clientX - dragState.startX;
+
+  if(dragState.which===1){
+    const total = dragState.leftW + dragState.midW;
+    let newLeft = dragState.leftW + dx;
+    newLeft = Math.max(0, Math.min(total, newLeft));
+    const newMid = total - newLeft;
+
+    left.style.flex = `0 0 ${newLeft}px`;
+    mid.style.flex  = `0 0 ${newMid}px`;
+    right.style.flex= `0 0 ${dragState.rightW}px`;
+  }else{
+    const total = dragState.midW + dragState.rightW;
+    let newMid = dragState.midW + dx;
+    newMid = Math.max(0, Math.min(total, newMid));
+    const newRight = total - newMid;
+
+    left.style.flex = `0 0 ${dragState.leftW}px`;
+    mid.style.flex  = `0 0 ${newMid}px`;
+    right.style.flex= `0 0 ${newRight}px`;
+  }
+  if($('#vp-autofit').checked) fitToFrame();
+}
+function endDrag(){
+  g1.classList.remove('dragging'); g2.classList.remove('dragging');
+  document.body.classList.remove('is-dragging');
+  document.body.style.cursor='';
+  window.removeEventListener('mousemove', onDrag);
+  window.removeEventListener('mouseup', endDrag);
+  dragState=null;
+  snapshotPaneState(); /* store new proportions after drag */
+}
+g1.addEventListener('mousedown', e=>startDrag(1,e));
+g2.addEventListener('mousedown', e=>startDrag(2,e));
+
+/* Proportional scaling when window width changes */
+function scalePanesOnResize(){
+  if(!paneState) { snapshotPaneState(); return; }
+  const w = workarea.clientWidth;
+  if(w<=0 || paneState.containerW<=0) { snapshotPaneState(); return; }
+  const k = w / paneState.containerW;
+  const newLeft  = Math.max(0, paneState.left  * k);
+  const newMid   = Math.max(0, paneState.mid   * k);
+  const newRight = Math.max(0, paneState.right * k);
+  left.style.flex = `0 0 ${newLeft}px`;
+  mid.style.flex  = `0 0 ${newMid}px`;
+  right.style.flex= `0 0 ${newRight}px`;
+  paneState = {containerW:w,left:newLeft,mid:newMid,right:newRight};
+  if($('#vp-autofit').checked) fitToFrame();
+}
+window.addEventListener('resize', scalePanesOnResize);
+
+/* ---------- Sample ---------- */
+const SAMPLE = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sample Page</title>
+<style>
+  body{font-family:system-ui,Segoe UI,Roboto;margin:0}
+  header{padding:16px;background:#111;color:#fff}
+  main{padding:16px}
+  .hero{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  .hero img{max-width:100%;height:auto;border-radius:8px}
+  button{background:#1f6feb;color:#fff;border:0;border-radius:8px;padding:10px 14px;cursor:pointer}
+</style>
+</head>
+<body>
+<header><b>My Site</b></header>
+<main>
+  <section class="hero">
+    <div>
+      <h1>Hello, world</h1>
+      <p>This is a live preview sample. Try editing the code and watch the preview update.</p>
+      <button id="cta">Click me</button>
+    </div>
+    <img src="https://picsum.photos/seed/preview/600/360" alt="Random">
+  </section>
+</main>
+<script>
+  document.getElementById('cta').addEventListener('click', ()=>alert('JS works inside the preview!'));
+<\/script>
+</body>
+</html>`;
+$('#btn-load-sample').addEventListener('click', ()=>{ codeEl.value = SAMPLE; updateEditorUI(); applyEditorMetrics(); refreshPreview(); });
+
+/* ---------- Init ---------- */
+applyEditorMetrics();
+codeEl.value = SAMPLE;
+updateEditorUI();
+refreshPreview();
+
+/* ---------- Viewport init ---------- */
+(function initViewport(){
+  const [w,h] = [parseInt($('#vp-w').value,10), parseInt($('#vp-h').value,10)];
+  if(w>0 && h>0) ratio = w/h;
+  (function applyViewportSize(){
+    const z = clamp(parseInt($('#vp-zoom').value||'80',10),10,300)/100;
+    const vw = parseInt($('#vp-w').value,10), vh = parseInt($('#vp-h').value,10);
+    $('#scale').style.width = vw+'px';
+    $('#scale').style.height = vh+'px';
+    $('#scale').style.transform = `scale(${z})`;
+    $('#viewport').style.width = (vw*z)+'px';
+    $('#viewport').style.height = (vh*z)+'px';
+  })();
+  document.getElementById('btn-fit').click();
+})();
+window.addEventListener('resize', ()=>{ applyEditorMetrics(); updateEditorUI(); });
+</script>
+</body>
+</html>
