@@ -155,11 +155,36 @@
   .find-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
   .find-flags{display:flex;gap:12px;align-items:center;margin-top:4px;color:#9fb2c8;font-size:12px}
   .find-counter{margin-left:auto;color:#cfe6ff}
+
+  /* ========== MOBILE FRIENDLY MODE (adds top mini-tabs & single-pane view) ========== */
+  .mobile-tabs{display:none;gap:6px}
+  .mobile-tabs .btn.small.active{border-color:var(--accent);box-shadow:0 0 0 2px rgba(92,200,255,.25) inset}
+  body.mobile-friendly header{flex-wrap:wrap}
+  body.mobile-friendly .mobile-tabs{display:flex}
+  body.mobile-friendly .workarea{
+    /* Use JS to set top dynamically; keep other edges consistent */
+    display:block;border-right:none;
+  }
+  body.mobile-friendly .gutter{display:none !important}
+  body.mobile-friendly .pane{display:none !important;width:100% !important;height:100% !important}
+  body.mobile-friendly.show-left  #pane-left,
+  body.mobile-friendly.show-mid   #pane-middle,
+  body.mobile-friendly.show-right #pane-right{display:flex !important}
+  /* End MOBILE FRIENDLY */
 </style>
 </head>
 <body>
   <header>
     <h1>Live HTML Previewer</h1>
+
+    <!-- MOBILE FRIENDLY: three small buttons to switch panes -->
+    <div class="mobile-tabs" id="mobileTabs" aria-label="Mobile view tabs">
+      <button id="tab-preview" class="btn small" aria-pressed="false" title="Show HTML Preview">Preview</button>
+      <button id="tab-editor"  class="btn small" aria-pressed="true"  title="Show Code Editor">Editor</button>
+      <button id="tab-options" class="btn small" aria-pressed="false" title="Show Preview Options">Options</button>
+    </div>
+    <!-- END MOBILE FRIENDLY -->
+
     <div class="sp"></div>
     <label class="toggle mono"><input type="checkbox" id="auto-refresh" checked> Auto-Refresh</label>
     <button id="btn-refresh" class="btn primary">Refresh Preview</button>
@@ -900,6 +925,70 @@ refreshPreview();
   document.getElementById('btn-fit').click();
 })();
 window.addEventListener('resize', ()=>{ applyEditorMetrics(); updateEditorUI(); });
+
+/* ---------- MOBILE FRIENDLY: detect, position, and tab switching ---------- */
+(function mobileFriendly(){
+  const body = document.body;
+  const header = document.querySelector('header');
+  const workareaEl = document.getElementById('workarea');
+
+  const tabPreview = document.getElementById('tab-preview');
+  const tabEditor  = document.getElementById('tab-editor');
+  const tabOptions = document.getElementById('tab-options');
+  const tabs = [tabPreview, tabEditor, tabOptions];
+
+  function setActiveTab(which){  // which: 'right' | 'mid' | 'left' | null
+    tabs.forEach(b=>{ b.classList.remove('active'); b.setAttribute('aria-pressed','false'); });
+    if(which==='right'){ tabPreview.classList.add('active'); tabPreview.setAttribute('aria-pressed','true'); }
+    if(which==='mid'){   tabEditor.classList.add('active');  tabEditor.setAttribute('aria-pressed','true'); }
+    if(which==='left'){  tabOptions.classList.add('active'); tabOptions.setAttribute('aria-pressed','true'); }
+  }
+
+  function ensureWorkareaTop(){
+    if(body.classList.contains('mobile-friendly')){
+      // header.offsetHeight + margins (approx 20px total) to avoid overlap
+      const top = (header.offsetHeight + 20);
+      workareaEl.style.top = top + 'px';
+    }else{
+      workareaEl.style.top = '64px'; // restore desktop default
+    }
+  }
+
+  function checkMobileMode(){
+    const mobile = window.innerWidth < window.innerHeight;
+    if(mobile){
+      if(!body.classList.contains('mobile-friendly')){
+        body.classList.add('mobile-friendly');
+        // default to Editor on first enter
+        body.classList.add('show-mid');
+        setActiveTab('mid');
+      }
+    }else{
+      body.classList.remove('mobile-friendly','show-left','show-mid','show-right');
+      setActiveTab(null);
+    }
+    ensureWorkareaTop();
+  }
+
+  function show(which){ // 'left' | 'mid' | 'right'
+    if(!body.classList.contains('mobile-friendly')) return;
+    body.classList.remove('show-left','show-mid','show-right');
+    body.classList.add('show-'+which);
+    setActiveTab(which);
+    if(which==='right' && $('#vp-autofit').checked){ try{ fitToFrame(); }catch(e){} }
+  }
+
+  tabPreview.addEventListener('click', ()=>show('right'));
+  tabEditor .addEventListener('click', ()=>show('mid'));
+  tabOptions.addEventListener('click', ()=>show('left'));
+
+  window.addEventListener('resize', checkMobileMode);
+  window.addEventListener('orientationchange', checkMobileMode);
+
+  // initial pass
+  checkMobileMode();
+})();
+/* ---------- END MOBILE FRIENDLY ---------- */
 </script>
 </body>
 </html>
